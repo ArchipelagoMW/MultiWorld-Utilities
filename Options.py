@@ -116,12 +116,6 @@ class Option(typing.Generic[T], metaclass=AssembleOptions):
     def current_key(self) -> str:
         return self.name_lookup[self.value]
 
-    def get_current_option_name(self) -> str:
-        """Deprecated. use current_option_name instead. TODO remove around 0.4"""
-        logging.warning(DeprecationWarning(f"get_current_option_name for {self.__class__.__name__} is deprecated."
-                                           f" use current_option_name instead. Worlds should use {self}.current_key"))
-        return self.current_option_name
-
     @property
     def current_option_name(self) -> str:
         """For display purposes. Worlds should be using current_key."""
@@ -133,6 +127,24 @@ class Option(typing.Generic[T], metaclass=AssembleOptions):
             return cls.name_lookup[value].replace("_", " ").title()
         else:
             return cls.name_lookup[value]
+
+    @classmethod
+    def get_choice(cls, yaml_option_entry: typing.Any) -> Option[T]:
+        """
+        Provides the user submitted options to be resolved. Options are generally expected to support a
+        weighted dict, choosing one of the results based on the weights. This step can be used to determine all
+        potential results that a user submitted.
+        """
+        if not cls.supports_weighting:  # TODO remove this attribute ~0.4.5
+            return cls.from_any(yaml_option_entry)
+        if type(yaml_option_entry) is list:
+            return cls.from_any(random.choices(yaml_option_entry)[0])
+        if type(yaml_option_entry) is not dict:
+            return cls.from_any(yaml_option_entry)
+        if any(yaml_option_entry.values()):
+            return cls.from_any(random.choices(list(yaml_option_entry),
+                                               weights=list(map(int, yaml_option_entry.values())))[0])
+        raise RuntimeError(f"All options specified for \"{cls.__name__}\" are weighted as zero.")
 
     def __int__(self) -> T:
         return self.value
@@ -789,6 +801,10 @@ class OptionDict(Option[typing.Dict[str, typing.Any]], VerifyKeys, typing.Mappin
     def get_option_name(self, value):
         return ", ".join(f"{key}: {v}" for key, v in value.items())
 
+    @classmethod
+    def get_choice(cls, yaml_option_entry: typing.Any) -> Option[T]:
+        return cls.from_any(yaml_option_entry)
+
     def __getitem__(self, item: str) -> typing.Any:
         return self.value.__getitem__(item)
 
@@ -834,6 +850,10 @@ class OptionList(Option[typing.List[typing.Any]], VerifyKeys):
     def get_option_name(self, value):
         return ", ".join(map(str, value))
 
+    @classmethod
+    def get_choice(cls, yaml_option_entry: typing.Any) -> Option[T]:
+        return cls.from_any(yaml_option_entry)
+
     def __contains__(self, item):
         return item in self.value
 
@@ -859,6 +879,10 @@ class OptionSet(Option[typing.Set[str]], VerifyKeys):
 
     def get_option_name(self, value):
         return ", ".join(sorted(value))
+
+    @classmethod
+    def get_choice(cls, yaml_option_entry: typing.Any) -> Option[T]:
+        return cls.from_any(yaml_option_entry)
 
     def __contains__(self, item):
         return item in self.value
