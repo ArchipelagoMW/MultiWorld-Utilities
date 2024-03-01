@@ -21,6 +21,9 @@ from settings import Settings, get_settings
 from typing import BinaryIO, Coroutine, Optional, Set, Dict, Any, Union
 from yaml import load, load_all, dump
 
+if typing.TYPE_CHECKING:
+    from worlds.AutoWorld import World
+
 try:
     from yaml import CLoader as UnsafeLoader, CSafeLoader as SafeLoader, CDumper as Dumper
 except ImportError:
@@ -952,6 +955,49 @@ def visualize_regions(root_region: Region, file_name: str, *,
 
     with open(file_name, "wt", encoding="utf-8") as f:
         f.write("\n".join(uml))
+
+
+def generate_world_template(world: World,
+                            target_folder: typing.Optional[typing.Union[str, "pathlib.Path"]] = None) -> None:
+    """
+    Generates a single YAML template for the provided world instance with its options
+    :param world: world to generate a template for. If an instance is passed will use the options currently set on that
+     world
+    :param target_folder: directory to output the YAML template to
+    """
+    from Options import NumericOption
+    from jinja2 import Template
+
+    if not target_folder:
+        target_folder = user_path("Players", "Templates")
+
+    game_name = world.game
+    all_options = {}
+    for option_name, option in world.options_dataclass.type_hints.items():
+        option_result = getattr(world.options, option_name)
+        if isinstance(option_result, NumericOption):
+            value = option_result.current_key
+        elif isinstance(option_result.value, set):
+            value = sorted(option_result.value)
+        else:
+            value = option_result.value
+        all_options[option_name] = value
+
+    os.makedirs(target_folder, exist_ok=True)
+    with open(local_path("data", "specified_options.yaml")) as f:
+        file_data = f.read()
+
+    res = Template(file_data).render(
+        options=all_options,
+        __version__=__version__,
+        game=game_name,
+        name=world.multiworld.get_player_name(world.player),
+    )
+
+    del file_data
+
+    with open(os.path.join(target_folder, game_name + ".yaml"), "w", encoding="utf-8-sig") as f:
+        f.write(res)
 
 
 class RepeatableChain:

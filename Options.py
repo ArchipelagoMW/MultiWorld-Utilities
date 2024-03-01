@@ -684,6 +684,10 @@ class Range(NumericOption):
             return cls(data)
         return cls.from_text(str(data))
 
+    @property
+    def current_key(self) -> str:
+        return str(self.value)
+
     @classmethod
     def get_option_name(cls, value: int) -> str:
         return str(value)
@@ -1110,7 +1114,13 @@ class PerGameCommonOptions(CommonOptions):
     item_links: ItemLinks
 
 
-def generate_yaml_templates(target_folder: typing.Union[str, "pathlib.Path"], generate_hidden: bool = True):
+def generate_yaml_templates(target_folder: typing.Union[str, "pathlib.Path"], generate_hidden: bool = True) -> None:
+    """
+    Generates YAML templates for all worlds.
+    
+    :param target_folder: The directory to output the YAML templates to
+    :param generate_hidden: Whether hidden worlds should have their YAML templates generated
+    """
     import os
 
     import yaml
