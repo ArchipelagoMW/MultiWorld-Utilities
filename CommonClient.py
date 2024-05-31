@@ -26,6 +26,7 @@ from Utils import Version, stream_input, async_start
 from worlds import network_data_package, AutoWorldRegister
 import os
 import ssl
+import collections
 
 if typing.TYPE_CHECKING:
     import kvui
@@ -92,7 +93,12 @@ class ClientCommandProcessor(CommandProcessor):
             return False
         count = 0
         checked_count = 0
-        for location, location_id in AutoWorldRegister.world_types[self.ctx.game].location_name_to_id.items():
+
+        if self.ctx.current_checksum[self.ctx.game]:
+            lookup = Utils.load_data_package_for_checksum(self.ctx.game, self.ctx.current_checksum[self.ctx.game]).get("location_name_to_id", {})
+        else:
+            lookup = AutoWorldRegister.world_types[self.ctx.game].location_name_to_id
+        for location, location_id in lookup.items():
             if filter_text and filter_text not in location:
                 continue
             if location_id < 0:
@@ -119,7 +125,12 @@ class ClientCommandProcessor(CommandProcessor):
             self.output("No game set, cannot determine existing items.")
             return False
         self.output(f"Item Names for {self.ctx.game}")
-        for item_name in AutoWorldRegister.world_types[self.ctx.game].item_name_to_id:
+
+        if self.ctx.current_checksum[self.ctx.game]:
+            lookup = Utils.load_data_package_for_checksum(self.ctx.game, self.ctx.current_checksum[self.ctx.game]).get("item_name_to_id", {})
+        else:
+            lookup = AutoWorldRegister.world_types[self.ctx.game].item_name_to_id
+        for item_name in lookup:
             self.output(item_name)
 
     def _cmd_item_groups(self):
@@ -128,7 +139,15 @@ class ClientCommandProcessor(CommandProcessor):
             self.output("No game set, cannot determine existing item groups.")
             return False
         self.output(f"Item Group Names for {self.ctx.game}")
-        for group_name in AutoWorldRegister.world_types[self.ctx.game].item_name_groups:
+
+        if self.ctx.current_checksum[self.ctx.game]:
+            lookup = Utils.persistent_load().get("groups_by_checksum", {}).get(self.ctx.current_checksum[self.ctx.game], {}).get(self.ctx.game, {}).get("item_name_groups", {})
+            if not lookup:
+                logger.warning(f"Network Item Group Names for {self.ctx.game} currently unknown, requesting info, try again later")
+                async_start(self.ctx.send_msgs([{"cmd": "Get", "keys": [f"_read_item_name_groups_{self.ctx.game}"]}])) 
+        else:
+            lookup = AutoWorldRegister.world_types[self.ctx.game].item_name_groups
+        for group_name in lookup:
             self.output(group_name)
 
     def _cmd_locations(self):
@@ -137,7 +156,12 @@ class ClientCommandProcessor(CommandProcessor):
             self.output("No game set, cannot determine existing locations.")
             return False
         self.output(f"Location Names for {self.ctx.game}")
-        for location_name in AutoWorldRegister.world_types[self.ctx.game].location_name_to_id:
+
+        if self.ctx.current_checksum[self.ctx.game]:
+            lookup = Utils.load_data_package_for_checksum(self.ctx.game, self.ctx.current_checksum[self.ctx.game]).get("location_name_to_id", {})
+        else:
+            lookup = AutoWorldRegister.world_types[self.ctx.game].location_name_to_id
+        for location_name in lookup:
             self.output(location_name)
 
     def _cmd_location_groups(self):
@@ -146,7 +170,15 @@ class ClientCommandProcessor(CommandProcessor):
             self.output("No game set, cannot determine existing location groups.")
             return False
         self.output(f"Location Group Names for {self.ctx.game}")
-        for group_name in AutoWorldRegister.world_types[self.ctx.game].location_name_groups:
+
+        if self.ctx.current_checksum[self.ctx.game]:
+            lookup = Utils.persistent_load().get("groups_by_checksum", {}).get(self.ctx.current_checksum[self.ctx.game], {}).get(self.ctx.game, {}).get("location_name_groups", {})
+            if not lookup:
+                logger.warning(f"Network Location Group Names for {self.ctx.game} currently unknown, requesting info, try again later")
+                async_start(self.ctx.send_msgs([{"cmd": "Get", "keys": [f"_read_location_name_groups_{self.ctx.game}"]}]))
+        else:
+            lookup = AutoWorldRegister.world_types[self.ctx.game].location_name_groups
+        for group_name in lookup:
             self.output(group_name)
 
     def _cmd_ready(self):
@@ -177,6 +209,7 @@ class CommonContext:
     # Contents in flux until connection to server is made, to download correct data for this multiworld.
     item_names: typing.Dict[int, str] = Utils.KeyedDefaultDict(lambda code: f'Unknown item (ID:{code})')
     location_names: typing.Dict[int, str] = Utils.KeyedDefaultDict(lambda code: f'Unknown location (ID:{code})')
+    current_checksum: typing.Dict[str, str] = collections.defaultdict(str)
 
     # defaults
     starting_reconnect_delay: int = 5
@@ -468,6 +501,7 @@ class CommonContext:
 
             remote_version: int = remote_date_package_versions.get(game, 0)
             remote_checksum: typing.Optional[str] = remote_data_package_checksums.get(game)
+            self.current_checksum[game] = remote_checksum
 
             if remote_version == 0 and not remote_checksum:  # custom data package and no checksum for this game
                 needed_updates.add(game)
@@ -508,6 +542,24 @@ class CommonContext:
         logger.info(f"Got new ID/Name DataPackage for {', '.join(data_package['games'])}")
         for game, game_data in data_package["games"].items():
             Utils.store_data_package_for_checksum(game, game_data)
+
+    def consume_network_item_groups(self):
+        data = {"item_name_groups": self.stored_data[f"_read_item_name_groups_{self.game}"]}
+        current_cache = Utils.persistent_load().get("groups_by_checksum", {}).get(self.current_checksum[self.game], {})
+        if self.game in current_cache:
+            current_cache[self.game].update(data)
+        else:
+            current_cache[self.game] = data
+        Utils.persistent_store("groups_by_checksum", self.current_checksum[self.game], current_cache)
+
+    def consume_network_location_groups(self):
+        data = {"location_name_groups": self.stored_data[f"_read_location_name_groups_{self.game}"]}
+        current_cache = Utils.persistent_load().get("groups_by_checksum", {}).get(self.current_checksum[self.game], {})
+        if self.game in current_cache:
+            current_cache[self.game].update(data)
+        else:
+            current_cache[self.game] = data
+        Utils.persistent_store("groups_by_checksum", self.current_checksum[self.game], current_cache)
 
     # data storage
 
@@ -871,6 +923,10 @@ async def process_server_cmd(ctx: CommonContext, args: dict):
         ctx.stored_data.update(args["keys"])
         if ctx.ui and f"_read_hints_{ctx.team}_{ctx.slot}" in args["keys"]:
             ctx.ui.update_hints()
+        if f"_read_item_name_groups_{ctx.game}" in args["keys"]:
+            ctx.consume_network_item_groups()
+        if f"_read_location_name_groups_{ctx.game}" in args["keys"]:
+            ctx.consume_network_location_groups()
 
     elif cmd == "SetReply":
         ctx.stored_data[args["key"]] = args["value"]
