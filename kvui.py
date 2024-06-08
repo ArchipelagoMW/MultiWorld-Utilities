@@ -1,3 +1,4 @@
+import math
 import os
 import logging
 import sys
@@ -380,23 +381,57 @@ class ConnectBarTextInput(TextInput):
         return super(ConnectBarTextInput, self).insert_text(s, from_undo=from_undo)
 
 
-class MessageBox(Popup):
-    class MessageBoxLabel(Label):
-        def __init__(self, **kwargs):
-            super().__init__(**kwargs)
+class MessageBoxLabel(Label):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._label.refresh()
+        self.size = self._label.texture.size
+        if self.width + 50 > Window.width:
+            self.text_size[0] = Window.width - 50
             self._label.refresh()
             self.size = self._label.texture.size
-            if self.width + 50 > Window.width:
-                self.text_size[0] = Window.width - 50
-                self._label.refresh()
-                self.size = self._label.texture.size
+
+
+class MessageBox(Popup):
 
     def __init__(self, title, text, error=False, **kwargs):
-        label = MessageBox.MessageBoxLabel(text=text)
+        label = MessageBoxLabel(text=text)
         separator_color = [217 / 255, 129 / 255, 122 / 255, 1.] if error else [47 / 255., 167 / 255., 212 / 255, 1.]
-        super().__init__(title=title, content=label, size_hint=(None, None), width=max(100, int(label.width) + 40),
+        super().__init__(title=title, content=label, size_hint=(0.4, 0.4), width=max(100, int(label.width) + 40),
                          separator_color=separator_color, **kwargs)
         self.height += max(0, label.height - 18)
+
+
+class ButtonsPrompt(Popup):
+    def __init__(self, title: str, text: str, response: typing.Callable[[str], None],
+                 *prompts: str, **kwargs):
+        layout = BoxLayout(orientation="vertical")
+        label = MessageBoxLabel(text=text)
+        layout.add_widget(label)
+
+        def on_release(button: Button, *args):
+            self.dismiss()
+            response(button.text)
+
+        num_rows = math.ceil(len(prompts) / 2)
+        if len(prompts) % 2 == 0:
+            button_rows = [(prompts[i], prompts[i+1]) for i in range(0, len(prompts), 2)]
+        else:
+            button_rows = [(prompts[i], prompts[i + 1]) for i in range(0, len(prompts) - 1, 2)]
+            button_rows.append((prompts[-1],))
+        for i in range(num_rows):
+            button_layout = BoxLayout(orientation="horizontal", size_hint_y=0.4)
+            for prompt in button_rows[i]:
+                button = Button(text=prompt, on_release=on_release)
+                button.text_size = button.width + 45, button.height
+                button.halign = "center"
+                button.valign = "middle"
+                button_layout.add_widget(button)
+            layout.add_widget(button_layout)
+
+        separator_color = [47 / 255., 167 / 255., 212 / 255, 1.]
+        super().__init__(title=title, content=layout, size_hint=(0.4, 0.4), width=max(100, int(label.width) + 40),
+                         separator_color=separator_color, auto_dismiss=False, **kwargs)
 
 
 class GameManager(App):
