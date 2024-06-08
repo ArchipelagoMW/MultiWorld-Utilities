@@ -1,12 +1,16 @@
 """API endpoints package."""
+import urllib.request
+from io import BytesIO
 from typing import List, Tuple
 from uuid import UUID
 
-from flask import Blueprint, abort, url_for
+from flask import Blueprint, abort, redirect, send_file, url_for
+from pony.orm import flush
+from requests import HTTPError
 
 import worlds.Files
 from .. import cache
-from ..models import Room, Seed
+from ..models import ArchipelagoInstaller, Room, Seed
 
 api_endpoints = Blueprint('api', __name__, url_prefix="/api")
 
@@ -64,6 +68,52 @@ def get_datapackage_checksums():
         game: game_data["checksum"] for game, game_data in network_data_package["games"].items()
     }
     return version_package
+
+
+@api_endpoints.route("/downloads/<string:build>")
+def get_download(build: str):
+    download_data = ArchipelagoInstaller.get(id=build)
+    try:
+        # ping GitHub API to make sure it's alive and cache the latest data
+        get_latest_release()
+        return redirect(download_data.url)
+    except HTTPError:
+        # GitHub request failed so return the last cached mirror
+        download_data.downloads += 1
+        return send_file(BytesIO(download_data.data), as_attachment=True, download_name=download_data.name)
+
+
+@cache.cached(timeout=300)
+def get_latest_release() -> None:
+    """Pulls the latest release from the Archipelago GitHub and saves them to the db."""
+    import requests
+    response = requests.get("https://api.github.com/repos/ArchipelagoMW/Archipelago/releases/latest", timeout=5)
+    response.raise_for_status()
+    data = response.json()
+    from pony.orm import db_session
+    with db_session:
+        for asset in data["assets"]:
+            filename = asset["name"]
+            if "AppImage" in filename:
+                name = "appimage"
+            elif "tar" in filename:
+                name = "tar"
+            elif "Win7" in filename:
+                name = "windows7"
+            elif "exe" in filename:
+                name = "windows"
+            else:
+                break
+            download_url = asset["browser_download_url"]
+            db_entry = ArchipelagoInstaller.get(id=name)
+            if db_entry is None:
+                ArchipelagoInstaller(id=name, name=filename, data=urllib.request.urlopen(download_url).read(), url=download_url, downloads=0)
+            else:
+                # we have the latest file so no need to download it again
+                if filename == db_entry.name:
+                    continue
+                db_entry.set(name=filename, data=urllib.request.urlopen(download_url).read(), url=download_url, downloads=0)
+    flush()
 
 
 from . import generate, user  # trigger registration

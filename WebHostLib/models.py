@@ -61,3 +61,11 @@ class Generation(db.Entity):
 class GameDataPackage(db.Entity):
     checksum = PrimaryKey(str)
     data = Required(bytes)
+
+
+class ArchipelagoInstaller(db.Entity):
+    id = PrimaryKey(str)
+    name = Required(str)
+    data = Required(bytes)
+    url = Required(str)
+    downloads = Required(int)
