@@ -1,12 +1,15 @@
-from worlds.AutoWorld import CollectionState
-from .Rules import can_use_hat, can_use_hookshot, can_hit, zipline_logic, get_difficulty, has_paintings
-from .Types import HatType, Difficulty, HatInTimeLocation, HatInTimeItem, LocData, HitType
-from .DeathWishLocations import dw_prereqs, dw_candles
-from BaseClasses import Entrance, Location, ItemClassification
-from worlds.generic.Rules import add_rule, set_rule
 from typing import List, Callable, TYPE_CHECKING
+
+from worlds.AutoWorld import CollectionState
+from worlds.generic.Rules import add_rule, set_rule
+from BaseClasses import Entrance, Location, ItemClassification, Req
+from BaseRules import AllReq, AnyReq, meets_req, req_to_rule, all_reqs_to_rule, any_req_to_rule, complex_reqs_to_rule, RULE_ALWAYS_TRUE
+
+from .DeathWishLocations import dw_prereqs, dw_candles
 from .Locations import death_wishes
 from .Options import EndGoal
+from .Rules import HOOKSHOT_REQ, hit_requirements, zipline_logic, get_difficulty, hat_requirements, painting_requirements
+from .Types import HatType, Difficulty, HatInTimeLocation, HatInTimeItem, LocData, HitType
 
 if TYPE_CHECKING:
     from . import HatInTimeWorld
@@ -103,6 +106,7 @@ required_snatcher_coins = {
 
 
 def set_dw_rules(world: "HatInTimeWorld"):
+    player = world.player
     if "Snatcher's Hit List" not in world.excluded_dws or "Camera Tourist" not in world.excluded_dws:
         set_enemy_rules(world)
 
@@ -117,19 +121,20 @@ def set_dw_rules(world: "HatInTimeWorld"):
         if name == "Snatcher Coins in Nyakuza Metro" and not world.is_dlc2():
             continue
 
-        dw = world.multiworld.get_region(name, world.player)
+        dw = world.multiworld.get_region(name, player)
         if not world.options.DWShuffle and name in dw_stamp_costs.keys():
+            stamp_rec = Req("Stamps", dw_stamp_costs[name])
             for entrance in dw.entrances:
-                add_rule(entrance, lambda state, n=name: state.has("Stamps", world.player, dw_stamp_costs[n]))
+                add_rule(entrance, req_to_rule(player, stamp_rec))
 
-        main_objective = world.multiworld.get_location(f"{name} - Main Objective", world.player)
-        all_clear = world.multiworld.get_location(f"{name} - All Clear", world.player)
-        main_stamp = world.multiworld.get_location(f"Main Stamp - {name}", world.player)
-        bonus_stamps = world.multiworld.get_location(f"Bonus Stamps - {name}", world.player)
+        main_objective = world.multiworld.get_location(f"{name} - Main Objective", player)
+        all_clear = world.multiworld.get_location(f"{name} - All Clear", player)
+        main_stamp = world.multiworld.get_location(f"Main Stamp - {name}", player)
+        bonus_stamps = world.multiworld.get_location(f"Bonus Stamps - {name}", player)
         if not world.options.DWEnableBonus:
             # place nothing, but let the locations exist still, so we can use them for bonus stamp rules
             all_clear.address = None
-            all_clear.place_locked_item(HatInTimeItem("Nothing", ItemClassification.filler, None, world.player))
+            all_clear.place_locked_item(HatInTimeItem("Nothing", ItemClassification.filler, None, player))
             all_clear.show_in_spoiler = False
 
         # No need for rules if excluded - stamps will be auto-granted
@@ -148,9 +153,10 @@ def set_dw_rules(world: "HatInTimeWorld"):
     if world.options.DWShuffle:
         for i in range(len(world.dw_shuffle)-1):
             name = world.dw_shuffle[i+1]
-            prev_dw = world.multiworld.get_region(world.dw_shuffle[i], world.player)
-            entrance = world.multiworld.get_entrance(f"{prev_dw.name} -> {name}", world.player)
-            add_rule(entrance, lambda state, n=prev_dw.name: state.has(f"1 Stamp - {n}", world.player))
+            prev_dw = world.multiworld.get_region(world.dw_shuffle[i], player)
+            entrance = world.multiworld.get_entrance(f"{prev_dw.name} -> {name}", player)
+            prev_dw_req = Req(f"1 Stamp - {prev_dw.name}", 1)
+            add_rule(entrance, req_to_rule(player, prev_dw_req))
     else:
         for key, reqs in dw_prereqs.items():
             if key == "Snatcher Coins in Nyakuza Metro" and not world.is_dlc2():
@@ -160,19 +166,20 @@ def set_dw_rules(world: "HatInTimeWorld"):
             entrances: List[Entrance] = []
 
             for parent in reqs:
-                entrance = world.multiworld.get_entrance(f"{parent} -> {key}", world.player)
+                entrance = world.multiworld.get_entrance(f"{parent} -> {key}", player)
                 entrances.append(entrance)
 
                 if not world.is_dw_excluded(parent):
-                    access_rules.append(lambda state, n=parent: state.has(f"1 Stamp - {n}", world.player))
+                    parent_req = Req(f"1 Stamp - {parent}", 1)
+                    access_rules.append(req_to_rule(player, parent_req))
 
             for entrance in entrances:
                 for rule in access_rules:
                     add_rule(entrance, rule)
 
     if world.options.EndGoal == EndGoal.option_seal_the_deal:
-        world.multiworld.completion_condition[world.player] = lambda state: \
-            state.has("1 Stamp - Seal the Deal", world.player)
+        seal_req = Req("1 Stamp - Seal the Deal", 1)
+        world.multiworld.completion_condition[player] = req_to_rule(player, seal_req)
 
 
 def add_dw_rules(world: "HatInTimeWorld", loc: Location):
@@ -185,123 +192,135 @@ def add_dw_rules(world: "HatInTimeWorld", loc: Location):
     if data is None:
         return
 
+    player = world.player
     if data.hookshot:
-        add_rule(loc, lambda state: can_use_hookshot(state, world))
+        add_rule(loc, req_to_rule(player, HOOKSHOT_REQ))
 
     for hat in data.required_hats:
-        add_rule(loc, lambda state, h=hat: can_use_hat(state, world, h))
+        add_rule(loc, req_to_rule(player, hat_requirements(world, hat)))
 
     for misc in data.misc_required:
-        add_rule(loc, lambda state, item=misc: state.has(item, world.player))
+        add_rule(loc, req_to_rule(player, Req(misc, 1)))
 
     if data.paintings > 0 and world.options.ShuffleSubconPaintings:
-        add_rule(loc, lambda state, paintings=data.paintings: has_paintings(state, world, paintings))
+        add_rule(loc, req_to_rule(player, painting_requirements(world, 1)))
 
     if data.hit_type is not HitType.none and world.options.UmbrellaLogic:
+        brewing_hat_req = hat_requirements(world, HatType.BREWING)
+        umbrella_req = Req("Umbrella", 1)
         if data.hit_type == HitType.umbrella:
-            add_rule(loc, lambda state: state.has("Umbrella", world.player))
+            add_rule(loc, req_to_rule(player, umbrella_req))
 
         elif data.hit_type == HitType.umbrella_or_brewing:
-            add_rule(loc, lambda state: state.has("Umbrella", world.player)
-                     or can_use_hat(state, world, HatType.BREWING))
+            add_rule(loc, any_req_to_rule(player, umbrella_req, brewing_hat_req))
 
         elif data.hit_type == HitType.dweller_bell:
-            add_rule(loc, lambda state: state.has("Umbrella", world.player)
-                     or can_use_hat(state, world, HatType.BREWING)
-                     or can_use_hat(state, world, HatType.DWELLER))
+            dweller_hat_req = hat_requirements(world, HatType.DWELLER)
+            add_rule(loc, any_req_to_rule(player, umbrella_req, brewing_hat_req, dweller_hat_req))
 
 
 def modify_dw_rules(world: "HatInTimeWorld", name: str):
+    player = world.player
     difficulty: Difficulty = get_difficulty(world)
-    main_objective = world.multiworld.get_location(f"{name} - Main Objective", world.player)
-    full_clear = world.multiworld.get_location(f"{name} - All Clear", world.player)
+    main_objective = world.multiworld.get_location(f"{name} - Main Objective", player)
+    full_clear = world.multiworld.get_location(f"{name} - All Clear", player)
+    umbrella_req = Req("Umbrella", 1)
 
     if name == "The Illness has Speedrun":
         # All stamps with hookshot only in Expert
         if difficulty >= Difficulty.EXPERT:
-            set_rule(full_clear, lambda state: True)
+            set_rule(full_clear, RULE_ALWAYS_TRUE)
         else:
-            add_rule(main_objective, lambda state: state.has("Umbrella", world.player))
+            add_rule(main_objective, req_to_rule(player, umbrella_req))
 
     elif name == "The Mustache Gauntlet":
-        add_rule(main_objective, lambda state: state.has("Umbrella", world.player)
-                 or can_use_hat(state, world, HatType.ICE) or can_use_hat(state, world, HatType.BREWING))
+        brewing_hat_req = hat_requirements(world, HatType.BREWING)
+        ice_hat_req = hat_requirements(world, HatType.ICE)
+        add_rule(main_objective, any_req_to_rule(player, umbrella_req, ice_hat_req, brewing_hat_req))
 
     elif name == "Vault Codes in the Wind":
         # Sprint is normally expected here
         if difficulty >= Difficulty.HARD:
-            set_rule(main_objective, lambda state: True)
+            set_rule(main_objective, RULE_ALWAYS_TRUE)
 
     elif name == "Speedrun Well":
         # All stamps with nothing :)
         if difficulty >= Difficulty.EXPERT:
-            set_rule(main_objective, lambda state: True)
+            set_rule(main_objective, RULE_ALWAYS_TRUE)
 
     elif name == "Mafia's Jumps":
         if difficulty >= Difficulty.HARD:
-            set_rule(main_objective, lambda state: True)
-            set_rule(full_clear, lambda state: True)
+            set_rule(main_objective, RULE_ALWAYS_TRUE)
+            set_rule(full_clear, RULE_ALWAYS_TRUE)
 
     elif name == "So You're Back from Outer Space":
         # Without Hookshot
         if difficulty >= Difficulty.HARD:
-            set_rule(main_objective, lambda state: True)
+            set_rule(main_objective, RULE_ALWAYS_TRUE)
 
     elif name == "Wound-Up Windmill":
         # No badge pin required. Player can switch to One Hit Hero after the checkpoint and do level without it.
         if difficulty >= Difficulty.MODERATE:
-            set_rule(full_clear, lambda state: can_use_hookshot(state, world)
-                     and state.has("One-Hit Hero Badge", world.player))
+            set_rule(full_clear, all_reqs_to_rule(player, HOOKSHOT_REQ, Req("One-Hit Hero Badge", 1)))
 
     if name in dw_candles:
         set_candle_dw_rules(name, world)
 
 
 def set_candle_dw_rules(name: str, world: "HatInTimeWorld"):
-    main_objective = world.multiworld.get_location(f"{name} - Main Objective", world.player)
-    full_clear = world.multiworld.get_location(f"{name} - All Clear", world.player)
+    player = world.player
+    main_objective = world.multiworld.get_location(f"{name} - Main Objective", player)
+    full_clear = world.multiworld.get_location(f"{name} - All Clear", player)
+    paintings_noskip = painting_requirements(world, 1, False)
 
     if name == "Zero Jumps":
-        add_rule(main_objective, lambda state: state.has("Zero Jumps", world.player))
-        add_rule(full_clear, lambda state: state.has("Zero Jumps", world.player, 4)
-                 and state.has("Train Rush (Zero Jumps)", world.player) and can_use_hat(state, world, HatType.ICE))
+        ice_hat_req = hat_requirements(world, HatType.ICE)
+        add_rule(main_objective, req_to_rule(player, Req("Zero Jumps", 1)))
+        add_rule(full_clear, all_reqs_to_rule(player,
+                                              Req("Zero Jumps", 4),
+                                              Req("Train Rush (Zero Jumps)", 1),
+                                              ice_hat_req))
 
         # No Ice Hat/painting required in Expert for Toilet Zero Jumps
         # This painting wall can only be skipped via cherry hover.
         if get_difficulty(world) < Difficulty.EXPERT or world.options.NoPaintingSkips:
-            set_rule(world.multiworld.get_location("Toilet of Doom (Zero Jumps)", world.player),
-                     lambda state: can_use_hookshot(state, world) and can_hit(state, world)
-                     and has_paintings(state, world, 1, False))
+            set_rule(world.multiworld.get_location("Toilet of Doom (Zero Jumps)", player),
+                     complex_reqs_to_rule(player, AllReq([
+                         HOOKSHOT_REQ,
+                         hit_requirements(world),
+                         paintings_noskip,
+                     ])))
         else:
-            set_rule(world.multiworld.get_location("Toilet of Doom (Zero Jumps)", world.player),
-                     lambda state: can_use_hookshot(state, world) and can_hit(state, world))
+            set_rule(world.multiworld.get_location("Toilet of Doom (Zero Jumps)", player),
+                     complex_reqs_to_rule(player, AllReq([
+                         HOOKSHOT_REQ,
+                         hit_requirements(world),
+                     ])))
 
-        set_rule(world.multiworld.get_location("Contractual Obligations (Zero Jumps)", world.player),
-                 lambda state: has_paintings(state, world, 1, False))
+        set_rule(world.multiworld.get_location("Contractual Obligations (Zero Jumps)", player),
+                 req_to_rule(player, paintings_noskip))
 
     elif name == "Snatcher's Hit List":
-        add_rule(main_objective, lambda state: state.has("Mafia Goon", world.player))
-        add_rule(full_clear, lambda state: state.has("Enemy", world.player, 12))
+        add_rule(main_objective, req_to_rule(player, Req("Mafia Goon", 1)))
+        add_rule(full_clear, req_to_rule(player, Req("Enemy", 12)))
 
     elif name == "Camera Tourist":
-        add_rule(main_objective, lambda state: state.has("Enemy", world.player, 8))
-        add_rule(full_clear, lambda state: state.has("Boss", world.player, 6)
-                 and state.has("Triple Enemy Photo", world.player))
+        add_rule(main_objective, req_to_rule(player, Req("Enemy", 8)))
+        add_rule(full_clear, all_reqs_to_rule(player, Req("Boss", 6), Req("Triple Enemy Photo", 1)))
 
     elif "Snatcher Coins" in name:
         coins: List[str] = []
         for coin in required_snatcher_coins[name]:
-            coins.append(coin)
-            add_rule(full_clear, lambda state, c=coin: state.has(c, world.player))
+            coins.append(Req(coin, 1))
+            add_rule(full_clear, req_to_rule(player, Req(coin, 1)))
 
         # any coin works for the main objective
-        add_rule(main_objective, lambda state: state.has(coins[0], world.player)
-                 or state.has(coins[1], world.player)
-                 or state.has(coins[2], world.player))
+        add_rule(main_objective, any_req_to_rule(player, *coins))
 
 
 def create_enemy_events(world: "HatInTimeWorld"):
     no_tourist = "Camera Tourist" in world.excluded_dws
+    player = world.player
     for enemy, regions in hit_list.items():
         if no_tourist and enemy in bosses:
             continue
@@ -319,12 +338,13 @@ def create_enemy_events(world: "HatInTimeWorld"):
             if world.options.DWShuffle and area in death_wishes.keys() and area not in world.dw_shuffle:
                 continue
 
-            region = world.multiworld.get_region(area, world.player)
-            event = HatInTimeLocation(world.player, f"{enemy} - {area}", None, region)
-            event.place_locked_item(HatInTimeItem(enemy, ItemClassification.progression, None, world.player))
+            region = world.multiworld.get_region(area, player)
+            event = HatInTimeLocation(player, f"{enemy} - {area}", None, region)
+            event.place_locked_item(HatInTimeItem(enemy, ItemClassification.progression, None, player))
             region.locations.append(event)
             event.show_in_spoiler = False
 
+    dweller_hat_req = hat_requirements(world, HatType.DWELLER)
     for name in triple_enemy_locations:
         if name == "Time Rift - Tour" and (not world.is_dlc1() or world.options.ExcludeTour):
             continue
@@ -332,17 +352,19 @@ def create_enemy_events(world: "HatInTimeWorld"):
         if world.options.DWShuffle and name in death_wishes.keys() and name not in world.dw_shuffle:
             continue
 
-        region = world.multiworld.get_region(name, world.player)
-        event = HatInTimeLocation(world.player, f"Triple Enemy Photo - {name}", None, region)
-        event.place_locked_item(HatInTimeItem("Triple Enemy Photo", ItemClassification.progression, None, world.player))
+        region = world.multiworld.get_region(name, player)
+        event = HatInTimeLocation(player, f"Triple Enemy Photo - {name}", None, region)
+        event.place_locked_item(HatInTimeItem("Triple Enemy Photo", ItemClassification.progression, None, player))
         region.locations.append(event)
         event.show_in_spoiler = False
         if name == "The Mustache Gauntlet":
-            add_rule(event, lambda state: can_use_hookshot(state, world) and can_use_hat(state, world, HatType.DWELLER))
+            add_rule(event, all_reqs_to_rule(player, HOOKSHOT_REQ, dweller_hat_req))
 
 
 def set_enemy_rules(world: "HatInTimeWorld"):
     no_tourist = "Camera Tourist" in world.excluded_dws or "Camera Tourist" in world.excluded_bonuses
+    player = world.player
+    dweller_hat_req = hat_requirements(world, HatType.DWELLER)
 
     for enemy, regions in hit_list.items():
         if no_tourist and enemy in bosses:
@@ -361,35 +383,40 @@ def set_enemy_rules(world: "HatInTimeWorld"):
             if world.options.DWShuffle and area in death_wishes and area not in world.dw_shuffle:
                 continue
 
-            event = world.multiworld.get_location(f"{enemy} - {area}", world.player)
+            event = world.multiworld.get_location(f"{enemy} - {area}", player)
 
             if enemy == "Toxic Flower":
-                add_rule(event, lambda state: can_use_hookshot(state, world))
+                add_rule(event, req_to_rule(player, HOOKSHOT_REQ))
 
-                if area == "The Illness has Spread":
-                    add_rule(event, lambda state: not zipline_logic(world) or
-                             state.has("Zipline Unlock - The Birdhouse Path", world.player)
-                             or state.has("Zipline Unlock - The Lava Cake Path", world.player)
-                             or state.has("Zipline Unlock - The Windmill Path", world.player))
+                if area == "The Illness has Spread" and zipline_logic(world):
+                    add_rule(event, any_req_to_rule(player, Req("Zipline Unlock - The Birdhouse Path"),
+                                                    Req("Zipline Unlock - The Lava Cake Path"),
+                                                    Req("Zipline Unlock - The Windmill Path")))
 
             elif enemy == "Director":
                 if area == "Dead Bird Studio Basement":
-                    add_rule(event, lambda state: can_use_hookshot(state, world))
+                    add_rule(event, req_to_rule(player, HOOKSHOT_REQ))
 
             elif enemy == "Snatcher" or enemy == "Mustache Girl":
                 if area == "Boss Rush":
                     # need to be able to kill toilet and snatcher
-                    add_rule(event, lambda state: can_hit(state, world) and can_use_hookshot(state, world))
+                    add_rule(event,
+                             complex_reqs_to_rule(player, AllReq([
+                                 HOOKSHOT_REQ,
+                                 hit_requirements(world),
+                             ])))
                     if enemy == "Mustache Girl":
-                        add_rule(event, lambda state: can_hit(state, world, True) and can_use_hookshot(state, world))
+                        add_rule(event, complex_reqs_to_rule(player, AllReq([
+                            HOOKSHOT_REQ,
+                            hit_requirements(world, True),
+                        ])))
 
                 elif area == "The Finale" and enemy == "Mustache Girl":
-                    add_rule(event, lambda state: can_use_hookshot(state, world)
-                             and can_use_hat(state, world, HatType.DWELLER))
+                    add_rule(event, all_reqs_to_rule(player, HOOKSHOT_REQ, dweller_hat_req))
 
             elif enemy == "Shock Squid" or enemy == "Ninja Cat":
                 if area == "Time Rift - Deep Sea":
-                    add_rule(event, lambda state: can_use_hookshot(state, world))
+                    add_rule(event, req_to_rule(player, HOOKSHOT_REQ))
 
 
 # Enemies for Snatcher's Hit List/Camera Tourist, and where to find them
