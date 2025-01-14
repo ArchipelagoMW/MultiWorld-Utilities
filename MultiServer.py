@@ -744,8 +744,9 @@ class Context:
             if not hint.local and data not in concerns[hint.finding_player]:
                 concerns[hint.finding_player].append(data)
 
-            # only remember hints that were not already found at the time of creation
-            if not hint.found:
+            # For !hint use cases, only hints that were not already found at the time of creation should be remembered
+            # For "scouting" use cases (LocationScouts with only_new), all hints should be remembered
+            if not hint.found or only_new:
                 # since hints are bidirectional, finding player and receiving player,
                 # we can check once if hint already exists
                 if hint not in self.hints[team, hint.finding_player]:
