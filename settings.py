@@ -669,6 +669,12 @@ class GeneratorOptions(Group):
         start_inventory -> Move remaining items to start_inventory, generate additional filler items to fill locations.
         """
 
+    class Sphere1PercentReservedLocations(int):
+        """
+        Percent of locations in sphere 1 to reserve for progression when placing local non-progression at the start
+        of fill. Helps prevent local items from flooding sphere 1 and causing deadlocks in fill.
+        """
+
     enemizer_path: EnemizerPath = EnemizerPath("EnemizerCLI/EnemizerCLI.Core")  # + ".exe" is implied on Windows
     player_files_path: PlayerFilesPath = PlayerFilesPath("Players")
     players: Players = Players(0)
@@ -678,6 +684,7 @@ class GeneratorOptions(Group):
     race: Race = Race(0)
     plando_options: PlandoOptions = PlandoOptions("bosses, connections, texts")
     panic_method: PanicMethod = PanicMethod("swap")
+    sphere_1_percent_reserved_locations: Sphere1PercentReservedLocations = Sphere1PercentReservedLocations(25)
 
 
 class SNIOptions(Group):
