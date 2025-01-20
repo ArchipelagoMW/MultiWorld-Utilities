@@ -95,6 +95,14 @@ def launch_subprocess(func: Callable, name: str = None, args: Tuple[str, ...] = 
     processes.add(process)
 
 
+def launch(func: Callable, name: str = None, args: Tuple[str, ...] = ()) -> None:
+    from Utils import is_kivy_running
+    if is_kivy_running():
+        launch_subprocess(func, name, args)
+    else:
+        func(*args)
+
+
 class SuffixIdentifier:
     suffixes: Iterable[str]
 
@@ -111,7 +119,7 @@ class SuffixIdentifier:
 
 def launch_textclient(*args):
     import CommonClient
-    launch_subprocess(CommonClient.run_as_textclient, name="TextClient", args=args)
+    launch(CommonClient.run_as_textclient, name="TextClient", args=args)
 
 
 def _install_apworld(apworld_src: str = "") -> Optional[Tuple[pathlib.Path, pathlib.Path]]:
