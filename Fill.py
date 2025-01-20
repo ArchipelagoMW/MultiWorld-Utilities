@@ -95,6 +95,7 @@ def fill_restrictive(multiworld: MultiWorld, base_state: CollectionState, locati
 
             spot_to_fill: typing.Optional[Location] = None
 
+
             # if minimal accessibility, only check whether location is reachable if game not beatable
             if multiworld.worlds[item_to_place.player].options.accessibility == Accessibility.option_minimal:
                 perform_access_check = not multiworld.has_beaten_game(maximum_exploration_state,
@@ -106,9 +107,28 @@ def fill_restrictive(multiworld: MultiWorld, base_state: CollectionState, locati
             for i, location in enumerate(locations):
                 if (not single_player_placement or location.player == item_to_place.player) \
                         and location.can_fill(maximum_exploration_state, item_to_place, perform_access_check):
+                    index_to_push_back: int = -1
+                    if location.item is not None:
+                        # assumption: this is local filler that can be safely re-placed
+                        # this could be quite slow, but should only happen in cases with lots of local items and
+                        # restrictive starts
+                        for j, filler_location in enumerate(locations):
+                            if filler_location.item is None and \
+                               filler_location.can_fill(maximum_exploration_state, location.item, False):
+                                # because filler_location is an empty spot, j < i, so we need to pop i first
+                                # ergo, save this index for later, but set the item now
+                                index_to_push_back = j
+                                multiworld.push_item(filler_location, location.item, False)
+                                break
+                        else:
+                            # can't move this filler to any other location
+                            continue
+
                     # popping by index is faster than removing by content,
                     spot_to_fill = locations.pop(i)
                     # skipping a scan for the element
+                    if index_to_push_back >= 0:
+                        locations.append(locations.pop(index_to_push_back))
                     break
 
             else:
@@ -236,7 +256,7 @@ def remaining_fill(multiworld: MultiWorld,
                    itempool: typing.List[Item],
                    name: str = "Remaining", 
                    move_unplaceable_to_start_inventory: bool = False,
-                   check_location_can_fill: bool = False) -> None:
+                   check_location_can_fill: bool = False) -> typing.List[Location]:
     unplaced_items: typing.List[Item] = []
     placements: typing.List[Location] = []
     swapped_items: typing.Counter[typing.Tuple[int, str]] = Counter()
@@ -328,6 +348,7 @@ def remaining_fill(multiworld: MultiWorld,
                             f"{', '.join(str(place) for place in placements)}", multiworld=multiworld)
 
     itempool.extend(unplaced_items)
+    return placements
 
 
 def fast_fill(multiworld: MultiWorld,
@@ -464,6 +485,7 @@ def distribute_items_restrictive(multiworld: MultiWorld,
     multiworld.random.shuffle(itempool)
 
     fill_locations, itempool = distribute_early_items(multiworld, fill_locations, itempool)
+    fill_locations, itempool = distribute_local_nonprogression(multiworld, fill_locations, itempool)
 
     progitempool: typing.List[Item] = []
     usefulitempool: typing.List[Item] = []
@@ -541,6 +563,10 @@ def distribute_items_restrictive(multiworld: MultiWorld,
         if location.item:
             location.locked = True
     del mark_for_locking, lock_later
+
+    # need to filter out locations with local filler now
+    excludedlocations = [location for location in excludedlocations if location.item is None]
+    defaultlocations = [location for location in defaultlocations if location.item is None]
 
     inaccessible_location_rules(multiworld, multiworld.state, defaultlocations)
 
@@ -1080,3 +1106,36 @@ def distribute_planned(multiworld: MultiWorld) -> None:
         except Exception as e:
             raise Exception(
                 f"Error running plando for player {player} ({multiworld.player_name[player]})") from e
+
+
+def distribute_local_nonprogression(multiworld: MultiWorld,
+                                    locations: typing.List[Location],
+                                    itempool: typing.List[Item]) \
+        -> typing.Tuple[typing.List[Location], typing.List[Item]]:
+    # call remaining_fill early on local items, but sort the list of locations filled this way to the back of the list
+    # instead of popping them entirely
+    local_nonprogression_items: typing.List[Item] = []
+    new_itempool: typing.List[Item] = []
+    for item in itempool:
+        if not item.advancement and item.name in multiworld.worlds[item.player].options.local_items.value:
+            local_nonprogression_items.append(item)
+        else:
+            new_itempool.append(item)
+    non_priority_locations: typing.List[Location] = []
+    priority_locations: typing.List[Location] = []
+    for location in locations:
+        if location.progress_type == location.progress_type.PRIORITY:
+            priority_locations.append(location)
+        else:
+            non_priority_locations.append(location)
+    placements: typing.List[Location] = remaining_fill(multiworld, non_priority_locations, local_nonprogression_items,
+                                                       "Local non-progression placement", False, True)
+    # local_nonprogression_items should be empty now
+    if local_nonprogression_items:
+        # this should only be happening if the world has a lot of strict
+        raise FillError("Not enough available locations for all local filler. Reduce the amount of local items or "
+                        "priority locations in your YAMLs.")
+    itempool = new_itempool
+    # place the filled locations at the back of the list
+    locations = [*priority_locations, *non_priority_locations, *placements]
+    return locations, itempool
